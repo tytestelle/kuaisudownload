@@ -327,10 +327,16 @@ browseBtn.addEventListener('click', async () => {
   }
 });
 
-openDirBtn.addEventListener('click', () => {
+// ★ 打开目录：走主进程 shell.openPath
+openDirBtn.addEventListener('click', async () => {
   const d = dirEl.value.trim();
-  if (d) {
-    window.open('file://' + d.replace(/\\/g, '/'));
+  if (!d) {
+    alert('请先选择保存目录');
+    return;
+  }
+  const err = await api.openDir(d);
+  if (err) {
+    alert('打开目录失败：\n' + err);
   }
 });
 
