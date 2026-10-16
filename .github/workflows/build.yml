@@ -9,13 +9,16 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（如 1.0.0），留空则从 package.json 读取'
+        description: '版本号（如 1.0.0），留空则读取 package.json'
         required: false
         default: ''
       create_release:
         description: '是否创建 Release'
         type: boolean
         default: false
+
+permissions:
+  contents: write
 
 jobs:
   build-windows:
@@ -33,19 +36,30 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Get version and Beijing time
+      - name: Read version & Beijing time
         id: meta
         shell: bash
         run: |
-          VERSION=$(node -p "require('./package.json').version")
-          # 北京时间 = UTC + 8
+          # 版本号：优先用 workflow_dispatch 输入，否则读 package.json
+          INPUT_VERSION="${{ github.event.inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION=$(node -p "require('./package.json').version")
+          fi
+
+          # 北京时间（UTC+8）
           BJ_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')
           BJ_DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d')
+          BJ_DATE_DASH=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')
+
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "bj_time=$BJ_TIME" >> $GITHUB_OUTPUT
           echo "bj_date=$BJ_DATE" >> $GITHUB_OUTPUT
-          echo "北京时间: $BJ_TIME"
+          echo "bj_date_dash=$BJ_DATE_DASH" >> $GITHUB_OUTPUT
+
           echo "版本号: $VERSION"
+          echo "北京时间: $BJ_TIME"
 
       - name: Build
         run: npm run build
@@ -55,7 +69,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: download-accelerator-windows-${{ steps.meta.outputs.version }}
+          name: download-accelerator-${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.bj_date }}
           path: |
             release/*.exe
             release/*.blockmap
@@ -63,8 +77,10 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+      - name: Create Release
+        if: |
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.meta.outputs.version }}
@@ -73,18 +89,28 @@ jobs:
             ## 下载加速器 v${{ steps.meta.outputs.version }}
 
             **构建时间**：${{ steps.meta.outputs.bj_time }}（北京时间）
-            **提交**：${{ github.sha }}
-
-            ### 下载
-            - **安装版**：`DownloadAccelerator-Setup-${{ steps.meta.outputs.version }}.exe`
-            - **便携版**：`DownloadAccelerator-Portable-${{ steps.meta.outputs.version }}.exe`
-
-            ### 说明
-            - 安装版：双击安装，会创建桌面快捷方式
-            - 便携版：免安装，双击直接运行
+            **提交**：`${{ github.sha }}`
+            **触发**：${{ github.event_name }}
 
             ---
-            如遇问题请提交 Issue。
+
+            ### 下载
+
+            | 版本 | 文件名 | 说明 |
+            |---|---|---|
+            | 安装版 | `DownloadAccelerator-Setup-${{ steps.meta.outputs.version }}.exe` | 双击安装，自动创建桌面快捷方式 |
+            | 便携版 | `DownloadAccelerator-Portable-${{ steps.meta.outputs.version }}.exe` | 免安装，双击直接运行 |
+
+            ### 特性
+
+            - undici + `stream.pipeline` 高速下载（C 层搬运数据）
+            - 81 条 GitHub 代理加速线路
+            - 两段测速：小样本筛选 → 大样本复测，自动挑最快
+            - 断点续传 + 单代理重试
+
+            ---
+
+            > 本 Release 由 GitHub Actions 自动生成，可手动编辑标题与内容。
           files: |
             release/*.exe
             release/*.blockmap
