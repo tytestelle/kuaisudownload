@@ -1,7 +1,7 @@
 {
-  "name": "winbox-dl",
+  "name": "download-accelerator",
   "version": "1.0.0",
-  "description": "Win-Box 下载器 - undici + stream.pipeline 高速下载",
+  "description": "下载加速器 - undici + stream.pipeline 高速下载",
   "main": "main.js",
   "author": "Win-Box",
   "license": "MIT",
@@ -18,8 +18,8 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "com.winbox.dl",
-    "productName": "Win-Box-DL",
+    "appId": "com.winbox.download-accelerator",
+    "productName": "DownloadAccelerator",
     "files": [
       "main.js",
       "preload.js",
@@ -47,11 +47,11 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Win-Box 下载器",
-      "artifactName": "${productName}-Setup-${version}.${ext}"
+      "shortcutName": "下载加速器",
+      "artifactName": "DownloadAccelerator-Setup-${version}.${ext}"
     },
     "portable": {
-      "artifactName": "${productName}-Portable-${version}.${ext}"
+      "artifactName": "DownloadAccelerator-Portable-${version}.${ext}"
     }
   }
 }
