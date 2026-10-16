@@ -4,18 +4,7 @@ on:
   push:
     branches: [main, master]
     tags: ['v*']
-  pull_request:
-    branches: [main, master]
   workflow_dispatch:
-    inputs:
-      version:
-        description: '版本号（如 1.0.0），留空则读取 package.json'
-        required: false
-        default: ''
-      create_release:
-        description: '是否创建 Release'
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -27,6 +16,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -36,60 +27,103 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Read version & Beijing time
+      # ---------------------------------------------------------------
+      # 自动生成版本号：package.json 的版本 + build 号（每次 push 递增）
+      # ---------------------------------------------------------------
+      - name: Generate version & Beijing time
         id: meta
         shell: bash
         run: |
-          # 版本号：优先用 workflow_dispatch 输入，否则读 package.json
-          INPUT_VERSION="${{ github.event.inputs.version }}"
-          if [ -n "$INPUT_VERSION" ]; then
-            VERSION="$INPUT_VERSION"
-          else
-            VERSION=$(node -p "require('./package.json').version")
-          fi
+          # package.json 里的版本（用户维护的"主版本"）
+          BASE_VERSION=$(node -p "require('./package.json').version")
 
-          # 北京时间（UTC+8）
+          # GitHub 每次 workflow 运行都会 +1，用作 build 号，永不冲突
+          BUILD_NUM="${GITHUB_RUN_NUMBER}"
+
+          # 完整版本号：1.0.0-build.42
+          FULL_VERSION="${BASE_VERSION}-build.${BUILD_NUM}"
+
+          # Release 的 tag：v1.0.0-build.42
+          RELEASE_TAG="v${FULL_VERSION}"
+
+          # 北京时间
           BJ_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')
-          BJ_DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d')
-          BJ_DATE_DASH=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')
+          BJ_DATE=$(TZ='Asia/Shanghai' date +'%Y-%m-%d')
+          BJ_SHORT=$(TZ='Asia/Shanghai' date +'%m%d-%H%M')
 
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "base_version=$BASE_VERSION" >> $GITHUB_OUTPUT
+          echo "build_num=$BUILD_NUM" >> $GITHUB_OUTPUT
+          echo "full_version=$FULL_VERSION" >> $GITHUB_OUTPUT
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
           echo "bj_time=$BJ_TIME" >> $GITHUB_OUTPUT
           echo "bj_date=$BJ_DATE" >> $GITHUB_OUTPUT
-          echo "bj_date_dash=$BJ_DATE_DASH" >> $GITHUB_OUTPUT
+          echo "bj_short=$BJ_SHORT" >> $GITHUB_OUTPUT
 
-          echo "版本号: $VERSION"
+          echo "=== 版本信息 ==="
+          echo "基础版本: $BASE_VERSION"
+          echo "Build 号: $BUILD_NUM"
+          echo "完整版本: $FULL_VERSION"
+          echo "Tag: $RELEASE_TAG"
           echo "北京时间: $BJ_TIME"
+
+      # ---------------------------------------------------------------
+      # 把 build 号写回 package.json，让 electron-builder 产出的
+      # exe 文件名也带 build 号（避免覆盖旧文件）
+      # ---------------------------------------------------------------
+      - name: Patch package.json version
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = require('./package.json');
+            pkg.version = '${{ steps.meta.outputs.full_version }}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+            console.log('package.json version →', pkg.version);
+          "
 
       - name: Build
         run: npm run build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: 🔍 列出构建产物（调试）
+        shell: bash
+        run: |
+          echo "=== release/ 目录 ==="
+          ls -la release/ 2>/dev/null || echo "release 目录不存在"
+          echo ""
+          echo "=== .exe 文件 ==="
+          find release/ -maxdepth 1 -name "*.exe" -type f 2>/dev/null || echo "无"
+          echo ""
+          echo "=== .yml 文件 ==="
+          find release/ -maxdepth 1 -name "*.yml" -type f 2>/dev/null || echo "无"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: download-accelerator-${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.bj_date }}
+          name: DownloadAccelerator-${{ steps.meta.outputs.full_version }}
           path: |
             release/*.exe
             release/*.blockmap
             release/latest.yml
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
+      # ---------------------------------------------------------------
+      # 自动发布到 Releases 页面
+      # ---------------------------------------------------------------
       - name: Create Release
-        if: |
-          startsWith(github.ref, 'refs/tags/v') ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.meta.outputs.version }}
-          name: v${{ steps.meta.outputs.version }} · 北京时间 ${{ steps.meta.outputs.bj_time }}
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          name: v${{ steps.meta.outputs.base_version }} · 北京时间 ${{ steps.meta.outputs.bj_time }}
           body: |
-            ## 下载加速器 v${{ steps.meta.outputs.version }}
+            ## 下载加速器 v${{ steps.meta.outputs.base_version }}
 
+            **构建号**：build.${{ steps.meta.outputs.build_num }}
             **构建时间**：${{ steps.meta.outputs.bj_time }}（北京时间）
             **提交**：`${{ github.sha }}`
+            **分支**：`${{ github.ref_name }}`
             **触发**：${{ github.event_name }}
 
             ---
@@ -98,19 +132,20 @@ jobs:
 
             | 版本 | 文件名 | 说明 |
             |---|---|---|
-            | 安装版 | `DownloadAccelerator-Setup-${{ steps.meta.outputs.version }}.exe` | 双击安装，自动创建桌面快捷方式 |
-            | 便携版 | `DownloadAccelerator-Portable-${{ steps.meta.outputs.version }}.exe` | 免安装，双击直接运行 |
+            | 安装版 | `DownloadAccelerator-Setup-${{ steps.meta.outputs.full_version }}.exe` | 双击安装，桌面快捷方式 |
+            | 便携版 | `DownloadAccelerator-Portable-${{ steps.meta.outputs.full_version }}.exe` | 免安装，双击即用 |
 
-            ### 特性
+            ### 功能
 
-            - undici + `stream.pipeline` 高速下载（C 层搬运数据）
+            - undici + `stream.pipeline` 高速下载（数据在 C 层搬运）
             - 81 条 GitHub 代理加速线路
-            - 两段测速：小样本筛选 → 大样本复测，自动挑最快
-            - 断点续传 + 单代理重试
+            - 两段测速：小样本筛 → 大样本复测，自动选最快
+            - 断点续传 + 单代理 6 次重试
 
             ---
 
-            > 本 Release 由 GitHub Actions 自动生成，可手动编辑标题与内容。
+            > 本 Release 由 GitHub Actions 自动生成。
+            > 构建号 `${{ steps.meta.outputs.build_num }}` 每次递增，如需回滚请下载对应构建号的版本。
           files: |
             release/*.exe
             release/*.blockmap
@@ -118,6 +153,6 @@ jobs:
           draft: false
           prerelease: false
           make_latest: true
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
