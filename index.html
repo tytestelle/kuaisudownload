@@ -1,1 +1,380 @@
 
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Win-Box 下载器</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%;
+    background: #0f1115;
+    color: #e8eaed;
+    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    overflow: hidden;
+    user-select: none;
+  }
+  body { display: flex; flex-direction: column; }
+
+  header { padding: 20px 28px 0; }
+  header h1 { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
+  header p { color: #8b92a0; font-size: 12px; margin-top: 4px; }
+
+  .card {
+    margin: 18px 28px 0;
+    background: #181c24;
+    border-radius: 8px;
+    padding: 22px;
+  }
+
+  .field-label {
+    color: #8b92a0;
+    font-size: 12px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .field-label .hint { color: #5a6273; font-size: 11px; }
+
+  .input, .input:focus {
+    width: 100%;
+    background: #0a0d12;
+    color: #e8eaed;
+    border: 1px solid #2a3038;
+    border-radius: 6px;
+    padding: 11px 14px;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    outline: none;
+    transition: border-color .15s;
+  }
+  .input:focus { border-color: #3b82f6; }
+  .input:disabled { opacity: .5; }
+  .input::placeholder { color: #4b5261; }
+
+  .field { margin-bottom: 18px; }
+
+  .dir-row { display: flex; gap: 10px; }
+  .dir-row .input { flex: 1; }
+
+  .btn {
+    background: #3b82f6;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 11px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s;
+    font-family: inherit;
+  }
+  .btn:hover { background: #2563eb; }
+  .btn:active { background: #1d4ed8; }
+  .btn:disabled { background: #2a3038; color: #5a6273; cursor: not-allowed; }
+
+  .btn-secondary { background: #20252f; color: #e8eaed; }
+  .btn-secondary:hover { background: #2a3038; }
+  .btn-danger { background: #ef4444; }
+  .btn-danger:hover { background: #dc2626; }
+
+  .btn-row { display: flex; gap: 10px; margin-top: 4px; }
+
+  .status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 20px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: #8b92a0;
+  }
+  .status-row .percent { font-family: Consolas, monospace; color: #e8eaed; font-weight: 600; }
+
+  .progress-track {
+    width: 100%;
+    height: 8px;
+    background: #0a0d12;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, #3b82f6, #60a5fa);
+    border-radius: 4px;
+    transition: width .2s ease;
+  }
+
+  .detail-row {
+    display: flex;
+    justify-content: space-between;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    color: #8b92a0;
+    margin-top: 8px;
+  }
+  .detail-row .speed { color: #3b82f6; }
+
+  .log-wrap {
+    flex: 1;
+    margin: 16px 28px 22px;
+    background: #0a0d12;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .log-title {
+    padding: 10px 14px;
+    font-size: 11px;
+    color: #8b92a0;
+    border-bottom: 1px solid #1a1f27;
+    display: flex;
+    justify-content: space-between;
+  }
+  .log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 14px;
+    font-family: Consolas, monospace;
+    font-size: 11.5px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: #b8bdc9;
+    user-select: text;
+  }
+  .log::-webkit-scrollbar { width: 8px; }
+  .log::-webkit-scrollbar-track { background: transparent; }
+  .log::-webkit-scrollbar-thumb { background: #2a3038; border-radius: 4px; }
+
+  .log .info { color: #8b92a0; }
+  .log .success { color: #10b981; }
+  .log .error { color: #ef4444; }
+  .log .warn { color: #f59e0b; }
+  .log .accent { color: #3b82f6; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Win-Box 下载器</h1>
+    <p>undici + stream.pipeline · 两段测速 · 自动优选线路</p>
+  </header>
+
+  <div class="card">
+    <div class="field">
+      <div class="field-label">下载地址</div>
+      <input id="url" class="input" type="text" placeholder="https://github.com/owner/repo/releases/download/...">
+    </div>
+
+    <div class="field">
+      <div class="field-label">保存目录 <span class="hint">（下次自动记住）</span></div>
+      <div class="dir-row">
+        <input id="dir" class="input" type="text">
+        <button id="browse" class="btn btn-secondary">浏览…</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <div class="field-label">文件名</div>
+      <input id="filename" class="input" type="text" placeholder="留空自动从链接提取">
+    </div>
+
+    <div class="btn-row">
+      <button id="download" class="btn">开始下载</button>
+      <button id="openDir" class="btn btn-secondary">打开目录</button>
+    </div>
+
+    <div class="status-row">
+      <span id="phase">就绪</span>
+      <span id="percent" class="percent"></span>
+    </div>
+    <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+    <div class="detail-row">
+      <span id="received"></span>
+      <span id="speed" class="speed"></span>
+    </div>
+  </div>
+
+  <div class="log-wrap">
+    <div class="log-title">
+      <span>日志</span>
+      <span id="clearLog" style="cursor:pointer;color:#5a6273">清空</span>
+    </div>
+    <div id="log" class="log"></div>
+  </div>
+
+<script>
+const api = window.electronAPI;
+
+const $ = (id) => document.getElementById(id);
+const urlEl = $('url');
+const dirEl = $('dir');
+const filenameEl = $('filename');
+const downloadBtn = $('download');
+const browseBtn = $('browse');
+const openDirBtn = $('openDir');
+const phaseEl = $('phase');
+const percentEl = $('percent');
+const progressFill = $('progressFill');
+const receivedEl = $('received');
+const speedEl = $('speed');
+const logEl = $('log');
+
+let downloading = false;
+
+// ---- 持久化配置 ----
+const CONFIG_KEY = 'winbox_dl_config';
+function loadConfig() {
+  try { return JSON.parse(localStorage.getItem(CONFIG_KEY) || '{}'); }
+  catch { return {}; }
+}
+function saveConfig(cfg) {
+  try { localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg)); } catch {}
+}
+
+// 默认目录：上次使用的，或桌面
+function getDefaultDir() {
+  const cfg = loadConfig();
+  if (cfg.dir) return cfg.dir;
+  // Electron 渲染进程拿不到 os.homedir，用 User Data 里的默认
+  return '';
+}
+
+function human(n) {
+  n = Math.max(0, Number(n) || 0);
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? Math.round(n) : n.toFixed(1)) + ' ' + units[i];
+}
+
+function log(text, cls = 'info') {
+  const span = document.createElement('div');
+  span.className = cls;
+  span.textContent = text;
+  logEl.appendChild(span);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function guessFilename(url) {
+  try {
+    const u = new URL(url);
+    const name = u.pathname.split('/').filter(Boolean).pop() || '';
+    return decodeURIComponent(name);
+  } catch { return ''; }
+}
+
+// ---- 初始化 ----
+const cfg = loadConfig();
+if (cfg.dir) dirEl.value = cfg.dir;
+if (cfg.filename) filenameEl.value = cfg.filename;
+
+urlEl.addEventListener('input', () => {
+  if (!filenameEl.value.trim()) {
+    filenameEl.value = guessFilename(urlEl.value.trim());
+  }
+});
+
+// ---- 事件 ----
+browseBtn.addEventListener('click', async () => {
+  const d = await api.selectDir();
+  if (d) {
+    dirEl.value = d;
+    saveConfig({ ...loadConfig(), dir: d });
+  }
+});
+
+openDirBtn.addEventListener('click', () => {
+  const d = dirEl.value.trim();
+  if (d) {
+    // 通过 shell 打开，主进程里注册一个 IPC，这里简化用 file:// 链接
+    // 更好：让主进程处理。这里 fallback：
+    window.open('file://' + d.replace(/\\/g, '/'));
+  }
+});
+
+downloadBtn.addEventListener('click', async () => {
+  if (downloading) return;
+
+  const url = urlEl.value.trim();
+  const dir = dirEl.value.trim();
+  let filename = filenameEl.value.trim() || guessFilename(url);
+
+  if (!url) { alert('请先粘贴下载地址'); return; }
+  if (!dir) { alert('请先选择保存目录'); return; }
+  if (!filename) { alert('无法从链接提取文件名，请手动填写'); return; }
+
+  saveConfig({ dir, filename });
+
+  downloading = true;
+  downloadBtn.disabled = true;
+  downloadBtn.textContent = '下载中…';
+  urlEl.disabled = true;
+  dirEl.disabled = true;
+  filenameEl.disabled = true;
+  logEl.innerHTML = '';
+  progressFill.style.width = '0%';
+  percentEl.textContent = '0.0%';
+  phaseEl.textContent = '准备中…';
+  receivedEl.textContent = '';
+  speedEl.textContent = '';
+  log('='.repeat(60));
+
+  try {
+    await api.startDownload({ url, dest: dir, filename });
+  } finally {
+    downloading = false;
+    downloadBtn.disabled = false;
+    downloadBtn.textContent = '开始下载';
+    urlEl.disabled = false;
+    dirEl.disabled = false;
+    filenameEl.disabled = false;
+  }
+});
+
+// ---- IPC ----
+api.onProgress((msg) => {
+  if (msg.type === 'log') {
+    const cls = msg.text.startsWith('✗') || msg.text.startsWith('失败')
+      ? 'error'
+      : msg.text.startsWith('⚠') ? 'warn'
+      : msg.text.startsWith('✓') || msg.text.startsWith('→ 最快') ? 'success'
+      : msg.text.startsWith('→') ? 'accent'
+      : 'info';
+    log(msg.text, cls);
+  } else if (msg.type === 'phase') {
+    phaseEl.textContent = msg.text;
+  } else if (msg.type === 'progress') {
+    const { received, total, percent, speed } = msg;
+    if (total > 0) {
+      progressFill.style.width = percent + '%';
+      percentEl.textContent = percent.toFixed(1) + '%';
+      receivedEl.textContent = `${human(received)} / ${human(total)}`;
+    } else {
+      receivedEl.textContent = human(received);
+    }
+    speedEl.textContent = speed > 0 ? human(speed) + '/s' : '';
+  } else if (msg.type === 'done') {
+    if (msg.ok) {
+      progressFill.style.width = '100%';
+      percentEl.textContent = '100.0%';
+      phaseEl.textContent = '下载完成';
+      speedEl.textContent = '';
+      log('');
+      log(msg.message, 'success');
+    } else {
+      phaseEl.textContent = '下载失败';
+      log('');
+      log(msg.message, 'error');
+    }
+  }
+});
+
+$('clearLog').addEventListener('click', () => { logEl.innerHTML = ''; });
+</script>
+</body>
+</html>
