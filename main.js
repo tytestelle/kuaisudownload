@@ -1,13 +1,11 @@
-
 // main.js — UpdateService.ts 的 Node/Electron 移植
-// 下载链路：undici + stream.pipeline（与 Win-Box 完全一致 → 20MB/s）
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const { Agent, request } = require('undici');
 const {
   createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync,
 } = require('node:fs');
 const { pipeline } = require('node:stream/promises');
-const { join, dirname, basename } = require('node:path');
+const { join, dirname } = require('node:path');
 const { URL } = require('node:url');
 
 // =========================================================================
@@ -103,7 +101,6 @@ const ACCEL_PROBE_BYTES = 96 * 1024;
 const ACCEL_PROBE_MS = 2200;
 const ACCEL_FINALISTS = 3;
 
-// UpdateService.ts 内部常量
 const PROBE_SMALL = { bytes: ACCEL_PROBE_BYTES, ms: ACCEL_PROBE_MS, headersTimeout: 2500 };
 const PROBE_BIG = { bytes: 1536 * 1024, ms: 3000, headersTimeout: 3000 };
 const SPEED_MIN_BYTES = 64 * 1024;
@@ -259,7 +256,7 @@ async function downloadOne(url, partPath, expectSize, emit, depth) {
     method: 'GET',
     headers: { 'User-Agent': UA },
     headersTimeout: 20000,
-    bodyTimeout: 0,               // ★ 关闭 body 超时（大文件关键）
+    bodyTimeout: 0,
     dispatcher: agent,
   });
   const loc = res.headers['location'];
@@ -291,8 +288,6 @@ async function downloadOne(url, partPath, expectSize, emit, depth) {
     }
   });
 
-  // ★★★ 关键：stream.pipeline —— Node 原生把 socket 数据直接导到文件
-  //     完全不过 JavaScript 解释器。这就是 20MB/s 的来源。
   const ws = createWriteStream(partPath);
   await pipeline(res.body, ws);
 
@@ -348,13 +343,16 @@ async function downloadPackage(accelUrls, dest, expectSize, emit) {
 let mainWindow = null;
 
 function createWindow() {
+  // 去掉默认菜单栏（File / Edit / View / Window / Help）
+  Menu.setApplicationMenu(null);
+
   mainWindow = new BrowserWindow({
     width: 820,
     height: 720,
     minWidth: 700,
     minHeight: 620,
     backgroundColor: '#0f1115',
-    title: 'Win-Box 下载器',
+    title: '下载加速器',
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
@@ -372,6 +370,17 @@ ipcMain.handle('select-dir', async () => {
   return r.canceled ? null : r.filePaths[0];
 });
 
+// ★ 用 shell.openPath 打开目录（window.open('file://') 会被 Electron 拦掉）
+ipcMain.handle('open-dir', async (_e, dirPath) => {
+  if (!dirPath) return '路径为空';
+  try {
+    const err = await shell.openPath(dirPath);
+    return err || null; // 空字符串 = 成功
+  } catch (e) {
+    return e.message || String(e);
+  }
+});
+
 ipcMain.handle('start-download', async (_e, { url, dest, filename }) => {
   const emit = (msg) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -379,7 +388,6 @@ ipcMain.handle('start-download', async (_e, { url, dest, filename }) => {
     }
   };
 
-  // 归一化：如果粘贴的是已带加速前缀的地址，抽回原始 GitHub 地址
   let rawUrl = url.trim();
   for (const scheme of ['https://github.com/', 'http://github.com/']) {
     const i = rawUrl.indexOf(scheme);
@@ -403,11 +411,9 @@ ipcMain.handle('start-download', async (_e, { url, dest, filename }) => {
   emit({ type: 'log', text: '' });
 
   try {
-    // 对 GitHub 地址走全套代理加速；非 GitHub 直接下
     if (isGithub) {
       return await downloadPackage(candidates, fullPath, 0, emit);
     }
-    // 非 GitHub：直接下
     const part = fullPath + '.part';
     await downloadOne(rawUrl, part, 0, emit, 0);
     rmSync(fullPath, { force: true });
