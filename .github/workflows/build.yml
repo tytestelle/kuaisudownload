@@ -1,4 +1,4 @@
-name: Build
+name: Build & Release
 
 on:
   push:
@@ -7,6 +7,15 @@ on:
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 1.0.0），留空则从 package.json 读取'
+        required: false
+        default: ''
+      create_release:
+        description: '是否创建 Release'
+        type: boolean
+        default: false
 
 jobs:
   build-windows:
@@ -20,10 +29,23 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # cache: 'npm'    ← 先注释掉
 
       - name: Install dependencies
-        run: npm install          # ← 从 npm ci 改成 npm install
+        run: npm install
+
+      - name: Get version and Beijing time
+        id: meta
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          # 北京时间 = UTC + 8
+          BJ_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')
+          BJ_DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "bj_time=$BJ_TIME" >> $GITHUB_OUTPUT
+          echo "bj_date=$BJ_DATE" >> $GITHUB_OUTPUT
+          echo "北京时间: $BJ_TIME"
+          echo "版本号: $VERSION"
 
       - name: Build
         run: npm run build
@@ -33,7 +55,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: winbox-dl-windows
+          name: download-accelerator-windows-${{ steps.meta.outputs.version }}
           path: |
             release/*.exe
             release/*.blockmap
@@ -42,14 +64,34 @@ jobs:
           retention-days: 30
 
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.meta.outputs.version }}
+          name: v${{ steps.meta.outputs.version }} · 北京时间 ${{ steps.meta.outputs.bj_time }}
+          body: |
+            ## 下载加速器 v${{ steps.meta.outputs.version }}
+
+            **构建时间**：${{ steps.meta.outputs.bj_time }}（北京时间）
+            **提交**：${{ github.sha }}
+
+            ### 下载
+            - **安装版**：`DownloadAccelerator-Setup-${{ steps.meta.outputs.version }}.exe`
+            - **便携版**：`DownloadAccelerator-Portable-${{ steps.meta.outputs.version }}.exe`
+
+            ### 说明
+            - 安装版：双击安装，会创建桌面快捷方式
+            - 便携版：免安装，双击直接运行
+
+            ---
+            如遇问题请提交 Issue。
           files: |
             release/*.exe
             release/*.blockmap
             release/latest.yml
           draft: false
-          generate_release_notes: true
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
