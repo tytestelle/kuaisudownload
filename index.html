@@ -1,9 +1,8 @@
-
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>Win-Box 下载器</title>
+<title>下载加速器</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
@@ -160,7 +159,7 @@
 </head>
 <body>
   <header>
-    <h1>Win-Box 下载器</h1>
+    <h1>下载加速器</h1>
     <p>undici + stream.pipeline · 两段测速 · 自动优选线路</p>
   </header>
 
@@ -179,8 +178,8 @@
     </div>
 
     <div class="field">
-      <div class="field-label">文件名</div>
-      <input id="filename" class="input" type="text" placeholder="留空自动从链接提取">
+      <div class="field-label">文件名 <span class="hint">（从链接自动提取，可手动修改）</span></div>
+      <input id="filename" class="input" type="text" placeholder="粘贴链接后自动填写">
     </div>
 
     <div class="btn-row">
@@ -225,23 +224,16 @@ const speedEl = $('speed');
 const logEl = $('log');
 
 let downloading = false;
+let filenameManuallyEdited = false;
 
-// ---- 持久化配置 ----
-const CONFIG_KEY = 'winbox_dl_config';
+// ---- 持久化配置（只记目录，不记文件名）----
+const CONFIG_KEY = 'download_accelerator_config';
 function loadConfig() {
   try { return JSON.parse(localStorage.getItem(CONFIG_KEY) || '{}'); }
   catch { return {}; }
 }
 function saveConfig(cfg) {
   try { localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg)); } catch {}
-}
-
-// 默认目录：上次使用的，或桌面
-function getDefaultDir() {
-  const cfg = loadConfig();
-  if (cfg.dir) return cfg.dir;
-  // Electron 渲染进程拿不到 os.homedir，用 User Data 里的默认
-  return '';
 }
 
 function human(n) {
@@ -260,22 +252,69 @@ function log(text, cls = 'info') {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
+// ---- 从 URL 提取文件名（增强版）----
 function guessFilename(url) {
+  if (!url) return '';
   try {
-    const u = new URL(url);
-    const name = u.pathname.split('/').filter(Boolean).pop() || '';
-    return decodeURIComponent(name);
-  } catch { return ''; }
+    let normalized = url.trim();
+    if (!/^https?:\/\//i.test(normalized)) {
+      normalized = 'https://' + normalized;
+    }
+
+    const u = new URL(normalized);
+    let pathname = u.pathname.replace(/\/+$/, '');
+    let name = pathname.split('/').filter(Boolean).pop() || '';
+
+    // 路径没文件名时，尝试从查询参数里找
+    if (!name) {
+      const queryKeys = ['filename', 'file', 'name', 'download'];
+      for (const key of queryKeys) {
+        const v = u.searchParams.get(key);
+        if (v) { name = v; break; }
+      }
+    }
+
+    // URL 解码（中文、空格、%20 等）
+    try { name = decodeURIComponent(name); } catch {}
+
+    // Windows 文件名非法字符替换
+    name = name.replace(/[\\/:*?"<>|]/g, '_').trim();
+
+    return name;
+  } catch {
+    return '';
+  }
 }
 
 // ---- 初始化 ----
 const cfg = loadConfig();
 if (cfg.dir) dirEl.value = cfg.dir;
-if (cfg.filename) filenameEl.value = cfg.filename;
 
+// ---- URL 变化时自动填文件名 ----
+function syncFilenameFromUrl() {
+  if (filenameManuallyEdited) return;
+  const url = urlEl.value.trim();
+  if (!url) return;
+  const guessed = guessFilename(url);
+  if (guessed) filenameEl.value = guessed;
+}
+
+urlEl.addEventListener('input', syncFilenameFromUrl);
+urlEl.addEventListener('paste', () => setTimeout(syncFilenameFromUrl, 0));
+urlEl.addEventListener('change', syncFilenameFromUrl);
+
+// 用户手动改过文件名之后，不再自动覆盖
+filenameEl.addEventListener('input', () => {
+  if (document.activeElement === filenameEl) {
+    filenameManuallyEdited = true;
+  }
+});
+
+// 清空 URL → 重置手动标记，下次粘贴新链接继续自动填
 urlEl.addEventListener('input', () => {
-  if (!filenameEl.value.trim()) {
-    filenameEl.value = guessFilename(urlEl.value.trim());
+  if (!urlEl.value.trim()) {
+    filenameManuallyEdited = false;
+    filenameEl.value = '';
   }
 });
 
@@ -291,8 +330,6 @@ browseBtn.addEventListener('click', async () => {
 openDirBtn.addEventListener('click', () => {
   const d = dirEl.value.trim();
   if (d) {
-    // 通过 shell 打开，主进程里注册一个 IPC，这里简化用 file:// 链接
-    // 更好：让主进程处理。这里 fallback：
     window.open('file://' + d.replace(/\\/g, '/'));
   }
 });
@@ -308,7 +345,8 @@ downloadBtn.addEventListener('click', async () => {
   if (!dir) { alert('请先选择保存目录'); return; }
   if (!filename) { alert('无法从链接提取文件名，请手动填写'); return; }
 
-  saveConfig({ dir, filename });
+  // 只保存目录
+  saveConfig({ dir });
 
   downloading = true;
   downloadBtn.disabled = true;
@@ -336,7 +374,7 @@ downloadBtn.addEventListener('click', async () => {
   }
 });
 
-// ---- IPC ----
+// ---- IPC 消息处理 ----
 api.onProgress((msg) => {
   if (msg.type === 'log') {
     const cls = msg.text.startsWith('✗') || msg.text.startsWith('失败')
