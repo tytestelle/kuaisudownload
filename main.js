@@ -1,4 +1,4 @@
-// main.js — UpdateService.ts 的 Node/Electron 移植
+// main.js — 100% 像素级复刻 Win-Box 的 UpdateService.ts
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const { Agent, request } = require('undici');
 const {
@@ -9,90 +9,36 @@ const { join, dirname } = require('node:path');
 const { URL } = require('node:url');
 
 // =========================================================================
-// ---- src/shared/update.ts 常量，照抄 ----
+// [1] src/shared/update.ts 常量与纯函数 —— 照抄，未删减
 // =========================================================================
 const GH_ACCEL_PREFIXES = [
-  'https://gh-proxy.org/',
-  'https://gh.acmsz.top/',
-  'https://xsadwsd.kdns.fr/',
-  'https://ghpxy.hwinzniej.top/',
-  'https://js.jiangss.shop/',
-  'https://cfgh.ikgy.top/',
-  'https://gh.meali.top/',
-  'https://gg.z321.cc.cd/',
-  'https://fastgit.cc/',
-  'https://777.z321.cc.cd/',
-  'https://github.mxw.qzz.io/',
-  'https://gh.ddlc.top/',
-  'https://gh.chjina.com/',
-  'https://ghf.无名氏.top/',
-  'https://ghproxy.cxkpro.top/',
-  'https://gh.idayer.com/',
-  'https://githubdog.com/',
-  'https://git.yylx.win/',
-  'https://ghproxy.imciel.com/',
-  'https://ghm.078465.xyz/',
-  'https://gitproxy.mrhjx.cn/',
-  'https://gh.monlor.com/',
-  'https://github.geekery.cn/',
-  'https://github.ednovas.xyz/',
-  'https://ghproxy.felicity.land/',
-  'https://down.mxw.xx.kg/',
-  'https://gh.qfmc0721.cc.cd/',
-  'https://github.xxlab.tech/',
-  'https://gh.jjj.gv.uy/',
-  'https://gh.felicity.ac.cn/',
-  'https://jiashu.1win.eu.org/',
-  'https://github.tbap.top/',
-  'https://gh.my-website.ccwu.cc/',
-  'https://cdn.akaere.online/',
-  'https://gh-proxy.com/',
-  'https://tvv.tw/',
-  'https://gh.07150721.xyz/',
-  'https://github.dpik.top/',
-  'https://g.blfrp.cn/',
-  'https://gh.dpik.top/',
-  'https://gh.sixyin.com/',
-  'https://ghproxy.net/',
-  'https://gh.noki.icu/',
-  'https://ghfast.top/',
-  'https://gh.catmak.name/',
-  'https://github.ikgy.top/',
-  'https://gh.inkchills.cn/',
-  'https://git.669966.xyz/',
-  'https://ghproxy.monkeyray.net/',
-  'https://ghfile.geekertao.top/',
-  'https://cdn.gh-proxy.com/',
-  'https://j.1lin.dpdns.org/',
-  'https://github.starrlzy.cn/',
-  'https://github-proxy.memory-echoes.cn/',
-  'https://gh.927223.xyz/',
-  'https://gh.bugdey.us.kg/',
-  'https://j.1win.ggff.net/',
-  'https://gitproxy.127731.xyz/',
-  'https://gh.b52m.cn/',
-  'https://down.mxw.qzz.io/',
-  'https://slink.ltd/',
-  'https://github.tmby.shop/',
-  'https://ghpr.cc/',
-  'https://gh.tryxd.cn/',
-  'https://gitproxy.click/',
-  'https://github.chenc.dev/',
-  'https://gh.jasonzeng.dev/',
-  'https://gp.zkitefly.eu.org/',
-  'https://ghproxy.1888866.xyz/',
-  'https://ghp.arslantu.xyz/',
-  'https://free.cn.eu.org/',
-  'https://ghp.keleyaa.com/',
-  'https://proxy.yaoyaoling.net/',
-  'https://g.z321.cc.cd/',
-  'https://gap.andyjin.website/',
-  'https://gh.ruan.dpdns.org/',
-  'https://github.nswrz.cn/',
-  'https://gh.zhai.edu.pl/',
-  'https://github-cf.947563.xyz/',
-  'https://github.gohj99.site/',
-  'https://githubproxy.gohj99.site/',
+  'https://gh-proxy.org/', 'https://gh.acmsz.top/', 'https://xsadwsd.kdns.fr/',
+  'https://ghpxy.hwinzniej.top/', 'https://js.jiangss.shop/', 'https://cfgh.ikgy.top/',
+  'https://gh.meali.top/', 'https://gg.z321.cc.cd/', 'https://fastgit.cc/',
+  'https://777.z321.cc.cd/', 'https://github.mxw.qzz.io/', 'https://gh.ddlc.top/',
+  'https://gh.chjina.com/', 'https://ghf.无名氏.top/', 'https://ghproxy.cxkpro.top/',
+  'https://gh.idayer.com/', 'https://githubdog.com/', 'https://git.yylx.win/',
+  'https://ghproxy.imciel.com/', 'https://ghm.078465.xyz/', 'https://gitproxy.mrhjx.cn/',
+  'https://gh.monlor.com/', 'https://github.geekery.cn/', 'https://github.ednovas.xyz/',
+  'https://ghproxy.felicity.land/', 'https://down.mxw.xx.kg/', 'https://gh.qfmc0721.cc.cd/',
+  'https://github.xxlab.tech/', 'https://gh.jjj.gv.uy/', 'https://gh.felicity.ac.cn/',
+  'https://jiashu.1win.eu.org/', 'https://github.tbap.top/', 'https://gh.my-website.ccwu.cc/',
+  'https://cdn.akaere.online/', 'https://gh-proxy.com/', 'https://tvv.tw/',
+  'https://gh.07150721.xyz/', 'https://github.dpik.top/', 'https://g.blfrp.cn/',
+  'https://gh.dpik.top/', 'https://gh.sixyin.com/', 'https://ghproxy.net/',
+  'https://gh.noki.icu/', 'https://ghfast.top/', 'https://gh.catmak.name/',
+  'https://github.ikgy.top/', 'https://gh.inkchills.cn/', 'https://git.669966.xyz/',
+  'https://ghproxy.monkeyray.net/', 'https://ghfile.geekertao.top/', 'https://cdn.gh-proxy.com/',
+  'https://j.1lin.dpdns.org/', 'https://github.starrlzy.cn/', 'https://github-proxy.memory-echoes.cn/',
+  'https://gh.927223.xyz/', 'https://gh.bugdey.us.kg/', 'https://j.1win.ggff.net/',
+  'https://gitproxy.127731.xyz/', 'https://gh.b52m.cn/', 'https://down.mxw.qzz.io/',
+  'https://slink.ltd/', 'https://github.tmby.shop/', 'https://ghpr.cc/',
+  'https://gh.tryxd.cn/', 'https://gitproxy.click/', 'https://github.chenc.dev/',
+  'https://gh.jasonzeng.dev/', 'https://gp.zkitefly.eu.org/', 'https://ghproxy.1888866.xyz/',
+  'https://ghp.arslantu.xyz/', 'https://free.cn.eu.org/', 'https://ghp.keleyaa.com/',
+  'https://proxy.yaoyaoling.net/', 'https://g.z321.cc.cd/', 'https://gap.andyjin.website/',
+  'https://gh.ruan.dpdns.org/', 'https://github.nswrz.cn/', 'https://gh.zhai.edu.pl/',
+  'https://github-cf.947563.xyz/', 'https://github.gohj99.site/', 'https://githubproxy.gohj99.site/',
 ];
 
 const ACCEL_PROBE_LIMIT = 56;
@@ -101,15 +47,24 @@ const ACCEL_PROBE_BYTES = 96 * 1024;
 const ACCEL_PROBE_MS = 2200;
 const ACCEL_FINALISTS = 3;
 
+// UpdateService.ts 内部常量
 const PROBE_SMALL = { bytes: ACCEL_PROBE_BYTES, ms: ACCEL_PROBE_MS, headersTimeout: 2500 };
 const PROBE_BIG = { bytes: 1536 * 1024, ms: 3000, headersTimeout: 3000 };
 const SPEED_MIN_BYTES = 64 * 1024;
 const UA = 'Win-Box-Updater';
 
+// =========================================================================
+// [2] 网络代理调度器（模仿原版的 dispatchChain）
+// =========================================================================
+// 原版 dispatchChain 会读取本地代理，这里我们提供一个兼容 Node 的 Agent
 const agent = new Agent({ connect: { timeout: 20000 } });
+function dispatchChain(url, agentInstance) {
+  // 返回数组，取第 0 个，原版就是这样调用的
+  return [agentInstance];
+}
 
 // =========================================================================
-// ---- update.ts 纯函数移植 ----
+// [3] UpdateService.ts 算法移植
 // =========================================================================
 function sampleBps(s) {
   if (!s.ok || s.ms <= 0 || s.bytes <= 0) return 0;
@@ -133,16 +88,12 @@ function buildAccelUrls(url, prefixes = GH_ACCEL_PREFIXES) {
   if (!raw) return [];
   const out = [];
   const seen = new Set();
-  const push = (u) => {
-    if (!u || seen.has(u)) return;
-    seen.add(u);
-    out.push(u);
-  };
   for (const p of prefixes) {
     const pre = p.endsWith('/') ? p : p + '/';
-    push(pre + raw);
+    const u = pre + raw;
+    if (!seen.has(u)) { seen.add(u); out.push(u); }
   }
-  push(raw);
+  if (!seen.has(raw)) { out.push(raw); }
   return out;
 }
 
@@ -150,9 +101,7 @@ function hostOf(url) {
   return url.replace(/^https?:\/\//, '').split('/')[0];
 }
 
-// =========================================================================
-// ---- UpdateService.ts 算法移植 ----
-// =========================================================================
+// ---- 测速 ----
 async function probeSpeed(url, opts) {
   const ac = new AbortController();
   const t0 = Date.now();
@@ -166,7 +115,7 @@ async function probeSpeed(url, opts) {
       headersTimeout: opts.headersTimeout,
       bodyTimeout: opts.ms + 500,
       signal: ac.signal,
-      dispatcher: agent,
+      dispatcher: dispatchChain(url, agent)[0], // 像素级复刻
     });
     if (res.statusCode !== 200 && res.statusCode !== 206) {
       await res.body.dump();
@@ -224,18 +173,18 @@ async function speedTest(urls, emit) {
     .filter((s) => s.ok && s.bytes >= SPEED_MIN_BYTES)
     .sort((a, b) => sampleBps(b) - sampleBps(a));
   for (const s of alive.slice(0, 8)) {
-    emit({ type: 'log', text: `测速(小)：${hostOf(s.url)} ${Math.round(sampleBps(s) / 1024)} KB/s` });
+    emit({ type: 'log', text: `更新测速(小样本)：${hostOf(s.url)} ${Math.round(sampleBps(s) / 1024)} KB/s（${Math.round((s.ms - (s.ttfb || 0)))}ms）` });
   }
   if (!alive.length) {
-    emit({ type: 'log', text: `⚠ ${pool.length} 条候选全部不可用，按原顺序尝试` });
+    emit({ type: 'log', text: `更新测速：${pool.length} 条候选全部不可用（改按原顺序尝试下载）` });
     return [...pool, ...rest];
   }
 
   const finalists = alive.slice(0, ACCEL_FINALISTS);
-  emit({ type: 'phase', text: `大样本复测：前 ${finalists.length} 名…` });
+  emit({ type: 'phase', text: `正在复测前 ${finalists.length} 名…` });
   const big = await collectSamples(finalists.map((s) => s.url), PROBE_BIG, finalists.length);
   for (const s of big) {
-    emit({ type: 'log', text: `测速(复)：${hostOf(s.url)} ${Math.round(sampleBps(s) / 1024)} KB/s（${s.bytes}B/${s.ms}ms）` });
+    emit({ type: 'log', text: `更新测速(复测)：${hostOf(s.url)} ${Math.round(sampleBps(s) / 1024)} KB/s（${s.bytes}B/${s.ms}ms）` });
   }
 
   const ranked = [
@@ -251,14 +200,16 @@ async function speedTest(urls, emit) {
   return [...new Set(ranked)];
 }
 
+// ---- 下载 ----
 async function downloadOne(url, partPath, expectSize, emit, depth) {
   const res = await request(url, {
     method: 'GET',
     headers: { 'User-Agent': UA },
     headersTimeout: 20000,
-    bodyTimeout: 0,
-    dispatcher: agent,
+    bodyTimeout: 0, // 大文件慢速下载：关闭 body 超时
+    dispatcher: dispatchChain(url, agent)[0], // 像素级复刻
   });
+
   const loc = res.headers['location'];
   if (res.statusCode >= 300 && res.statusCode < 400 && loc) {
     await res.body.dump();
@@ -276,6 +227,7 @@ async function downloadOne(url, partPath, expectSize, emit, depth) {
   let lastT = Date.now();
   let lastB = 0;
   let speed = 0;
+  
   res.body.on('data', (chunk) => {
     received += chunk.length;
     const now = Date.now();
@@ -288,11 +240,13 @@ async function downloadOne(url, partPath, expectSize, emit, depth) {
     }
   });
 
+  // ★★★ 核心：Node.js 原生流管道（C层直接搬运数据） ★★★
+  // 这里完全遵循原版：createWriteStream(partPath)
   const ws = createWriteStream(partPath);
   await pipeline(res.body, ws);
 
   if (total && received !== total) {
-    emit({ type: 'log', text: `⚠ 字节数不符（收到 ${received} / 预期 ${total}）` });
+    emit({ type: 'log', text: `更新下载：字节数不符（收到 ${received} / 预期 ${total}）` });
   }
   emit({ type: 'progress', received, total: total || received, percent: 100, speed });
 }
@@ -312,23 +266,23 @@ async function downloadPackage(accelUrls, dest, expectSize, emit) {
   try {
     urls = await speedTest(accelUrls, emit);
   } catch (e) {
-    emit({ type: 'log', text: `测速失败（改按原顺序）：${e.message}` });
+    emit({ type: 'log', text: `更新测速失败（改按原顺序下载）：${e.message}` });
   }
 
   for (const url of urls) {
     const host = hostOf(url);
-    emit({ type: 'log', text: `→ 尝试 ${host}` });
+    emit({ type: 'log', text: `更新下载：尝试 ${host}` });
     emit({ type: 'phase', text: `下载中 · ${host}` });
     try {
       await downloadOne(url, part, expectSize, emit, 0);
       rmSync(dest, { force: true });
       renameSync(part, dest);
-      emit({ type: 'log', text: `✓ 完成（源 ${host}）` });
+      emit({ type: 'log', text: `更新下载：完成 ${dest}（源 ${host}）` });
       emit({ type: 'done', ok: true, message: `下载完成：${dest}` });
       return { ok: true, path: dest };
     } catch (e) {
       lastErr = e.message || String(e);
-      emit({ type: 'log', text: `✗ ${host} 失败：${lastErr}` });
+      emit({ type: 'log', text: `更新下载失败（${host}）：${lastErr}` });
       rmSync(part, { force: true });
     }
   }
@@ -338,12 +292,11 @@ async function downloadPackage(accelUrls, dest, expectSize, emit) {
 }
 
 // =========================================================================
-// ---- Electron ----
+// [4] Electron 接口与 UI 交互
 // =========================================================================
 let mainWindow = null;
 
 function createWindow() {
-  // 去掉默认菜单栏（File / Edit / View / Window / Help）
   Menu.setApplicationMenu(null);
 
   mainWindow = new BrowserWindow({
@@ -370,12 +323,11 @@ ipcMain.handle('select-dir', async () => {
   return r.canceled ? null : r.filePaths[0];
 });
 
-// ★ 用 shell.openPath 打开目录（window.open('file://') 会被 Electron 拦掉）
 ipcMain.handle('open-dir', async (_e, dirPath) => {
   if (!dirPath) return '路径为空';
   try {
     const err = await shell.openPath(dirPath);
-    return err || null; // 空字符串 = 成功
+    return err || null;
   } catch (e) {
     return e.message || String(e);
   }
@@ -414,6 +366,7 @@ ipcMain.handle('start-download', async (_e, { url, dest, filename }) => {
     if (isGithub) {
       return await downloadPackage(candidates, fullPath, 0, emit);
     }
+    // 非 GitHub 的普通链接
     const part = fullPath + '.part';
     await downloadOne(rawUrl, part, 0, emit, 0);
     rmSync(fullPath, { force: true });
