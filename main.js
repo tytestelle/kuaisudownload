@@ -53,6 +53,11 @@ const PROBE_BIG = { bytes: 1536 * 1024, ms: 3000, headersTimeout: 3000 };
 const SPEED_MIN_BYTES = 64 * 1024;
 const UA = 'Win-Box-Updater';
 
+// ★ 下载速度门限常量：10 秒内平均 < 1 MB/s 即换线
+const MIN_DOWNLOAD_BPS = 1024 * 1024;   // 1 MiB/s
+const SPEED_WINDOW_MS = 10000;          // 10 秒滚动窗口
+const MAX_RETESTS = 3;                  // 最多重新测速 3 次，防死循环
+
 // =========================================================================
 // [2] 网络代理调度器（模仿原版的 dispatchChain）
 // =========================================================================
@@ -201,13 +206,22 @@ async function speedTest(urls, emit) {
 }
 
 // ---- 下载 ----
-async function downloadOne(url, partPath, expectSize, emit, depth) {
+// opts: { minSpeedBps?: number, speedWindowMs?: number }
+// 当滚动窗口（默认 10s）内平均速度低于 minSpeedBps 时，主动 abort 并抛出 abortedBySpeed
+async function downloadOne(url, partPath, expectSize, emit, depth, opts = {}) {
+  const { minSpeedBps = 0, speedWindowMs = SPEED_WINDOW_MS } = opts;
+
+  const ac = new AbortController();
+  let abortedBySpeed = false;
+  let speedCheck = null;
+
   const res = await request(url, {
     method: 'GET',
     headers: { 'User-Agent': UA },
     headersTimeout: 20000,
     bodyTimeout: 0, // 大文件慢速下载：关闭 body 超时
-    dispatcher: dispatchChain(url, agent)[0], // 像素级复刻
+    signal: ac.signal,                          // ★ 允许被速度监控中止
+    dispatcher: dispatchChain(url, agent)[0],   // 像素级复刻
   });
 
   const loc = res.headers['location'];
@@ -215,7 +229,7 @@ async function downloadOne(url, partPath, expectSize, emit, depth) {
     await res.body.dump();
     if (depth >= 8) throw new Error('重定向次数过多');
     const next = new URL(String(loc), url).toString();
-    return downloadOne(next, partPath, expectSize, emit, depth + 1);
+    return downloadOne(next, partPath, expectSize, emit, depth + 1, opts);
   }
   if (res.statusCode !== 200) {
     await res.body.dump();
@@ -227,7 +241,7 @@ async function downloadOne(url, partPath, expectSize, emit, depth) {
   let lastT = Date.now();
   let lastB = 0;
   let speed = 0;
-  
+
   res.body.on('data', (chunk) => {
     received += chunk.length;
     const now = Date.now();
@@ -240,10 +254,52 @@ async function downloadOne(url, partPath, expectSize, emit, depth) {
     }
   });
 
+  // ★★★ 滚动窗口速度监控：任意约 10s 窗口平均 < 1MB/s 触发 abort ★★★
+  if (minSpeedBps > 0) {
+    const t0 = Date.now();
+    const samples = [{ t: t0, bytes: 0 }]; // { 时间戳, 累计字节 }
+    speedCheck = setInterval(() => {
+      if (abortedBySpeed) return;
+      const now = Date.now();
+      samples.push({ t: now, bytes: received });
+
+      // 只保留最近约 speedWindowMs 的样本（至少 2 个）
+      while (samples.length > 2 && now - samples[0].t > speedWindowMs) {
+        samples.shift();
+      }
+
+      const oldest = samples[0];
+      const elapsed = now - oldest.t;
+      // 窗口足够长（≥90%）才做判定，避免开头几秒误判
+      if (samples.length >= 2 && elapsed >= speedWindowMs * 0.9) {
+        const bps = ((received - oldest.bytes) * 1000) / elapsed;
+        if (bps < minSpeedBps) {
+          abortedBySpeed = true;
+          if (speedCheck) { clearInterval(speedCheck); speedCheck = null; }
+          ac.abort();
+        }
+      }
+    }, 500);
+  }
+
   // ★★★ 核心：Node.js 原生流管道（C层直接搬运数据） ★★★
   // 这里完全遵循原版：createWriteStream(partPath)
   const ws = createWriteStream(partPath);
-  await pipeline(res.body, ws);
+  try {
+    await pipeline(res.body, ws);
+  } catch (e) {
+    if (abortedBySpeed) {
+      const err = new Error(
+        `平均速度持续低于 ${(minSpeedBps / 1024 / 1024).toFixed(1)} MB/s（${speedWindowMs / 1000}s 窗口），触发换线路`
+      );
+      err.code = 'SPEED_TOO_LOW';
+      err.abortedBySpeed = true;
+      throw err;
+    }
+    throw e;
+  } finally {
+    if (speedCheck) { clearInterval(speedCheck); speedCheck = null; }
+  }
 
   if (total && received !== total) {
     emit({ type: 'log', text: `更新下载：字节数不符（收到 ${received} / 预期 ${total}）` });
@@ -269,12 +325,21 @@ async function downloadPackage(accelUrls, dest, expectSize, emit) {
     emit({ type: 'log', text: `更新测速失败（改按原顺序下载）：${e.message}` });
   }
 
-  for (const url of urls) {
+  // ★★★ 速度门限 + 自动换线 ★★★
+  let remaining = urls.slice();
+  let retestCount = 0;
+
+  while (remaining.length > 0) {
+    const url = remaining.shift();
     const host = hostOf(url);
     emit({ type: 'log', text: `更新下载：尝试 ${host}` });
     emit({ type: 'phase', text: `下载中 · ${host}` });
+
     try {
-      await downloadOne(url, part, expectSize, emit, 0);
+      await downloadOne(url, part, expectSize, emit, 0, {
+        minSpeedBps: MIN_DOWNLOAD_BPS,
+        speedWindowMs: SPEED_WINDOW_MS,
+      });
       rmSync(dest, { force: true });
       renameSync(part, dest);
       emit({ type: 'log', text: `更新下载：完成 ${dest}（源 ${host}）` });
@@ -282,8 +347,30 @@ async function downloadPackage(accelUrls, dest, expectSize, emit) {
       return { ok: true, path: dest };
     } catch (e) {
       lastErr = e.message || String(e);
-      emit({ type: 'log', text: `更新下载失败（${host}）：${lastErr}` });
       rmSync(part, { force: true });
+
+      if (e.abortedBySpeed) {
+        emit({
+          type: 'log',
+          text: `⚡ ${host} 平均速度低于 ${(MIN_DOWNLOAD_BPS / 1024 / 1024).toFixed(1)} MB/s（${SPEED_WINDOW_MS / 1000}s），准备切换线路`,
+        });
+
+        if (retestCount < MAX_RETESTS && remaining.length > 0) {
+          retestCount++;
+          emit({ type: 'log', text: `重新测速中（第 ${retestCount}/${MAX_RETESTS} 次）…` });
+          try {
+            // 对剩余线路重新测速；失败线路也纳入测速但排到最后再试
+            const ranked = await speedTest([...remaining, url], emit);
+            remaining = ranked.filter((u) => u !== url).concat([url]);
+          } catch (e2) {
+            emit({ type: 'log', text: `重新测速失败（保留原顺序）：${e2.message}` });
+          }
+        } else if (retestCount >= MAX_RETESTS) {
+          emit({ type: 'log', text: `⚡ 已重测 ${MAX_RETESTS} 次，按剩余顺序继续尝试` });
+        }
+      } else {
+        emit({ type: 'log', text: `更新下载失败（${host}）：${lastErr}` });
+      }
     }
   }
 
@@ -366,7 +453,7 @@ ipcMain.handle('start-download', async (_e, { url, dest, filename }) => {
     if (isGithub) {
       return await downloadPackage(candidates, fullPath, 0, emit);
     }
-    // 非 GitHub 的普通链接
+    // 非 GitHub 的普通链接：单线路，不启用速度门限（无替代线路可换）
     const part = fullPath + '.part';
     await downloadOne(rawUrl, part, 0, emit, 0);
     rmSync(fullPath, { force: true });
