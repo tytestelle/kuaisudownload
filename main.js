@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron')
 const { Agent, request } = require('undici');
 const {
   createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync,
+  readFileSync, writeFileSync,
 } = require('node:fs');
 const { pipeline } = require('node:stream/promises');
 const { join, dirname } = require('node:path');
@@ -56,15 +57,16 @@ const UA = 'Win-Box-Updater';
 // ★ 下载速度门限常量：10 秒内平均 < 1 MB/s 即换线
 const MIN_DOWNLOAD_BPS = 1024 * 1024;   // 1 MiB/s
 const SPEED_WINDOW_MS = 10000;          // 10 秒滚动窗口
-const MAX_RETESTS = 3;                  // 最多重新测速 3 次，防死循环
+// ★ 重试次数已改为无限制（原 MAX_RETESTS = 3 已移除）
+
+// ★ 记住的最快线路（持久化到用户数据目录）
+const PREF_FILE_NAME = 'preferred-line.json';
 
 // =========================================================================
 // [2] 网络代理调度器（模仿原版的 dispatchChain）
 // =========================================================================
-// 原版 dispatchChain 会读取本地代理，这里我们提供一个兼容 Node 的 Agent
 const agent = new Agent({ connect: { timeout: 20000 } });
 function dispatchChain(url, agentInstance) {
-  // 返回数组，取第 0 个，原版就是这样调用的
   return [agentInstance];
 }
 
@@ -104,6 +106,52 @@ function buildAccelUrls(url, prefixes = GH_ACCEL_PREFIXES) {
 
 function hostOf(url) {
   return url.replace(/^https?:\/\//, '').split('/')[0];
+}
+
+// ---- 记住线路的持久化 ----
+function prefFilePath() {
+  return join(app.getPath('userData'), PREF_FILE_NAME);
+}
+
+function loadPreferredPrefix() {
+  try {
+    const p = prefFilePath();
+    if (!existsSync(p)) return null;
+    const j = JSON.parse(readFileSync(p, 'utf8'));
+    return typeof j.prefix === 'string' && j.prefix ? j.prefix : null;
+  } catch {
+    return null;
+  }
+}
+
+function savePreferredPrefix(prefix, host) {
+  try {
+    mkdirSync(app.getPath('userData'), { recursive: true });
+    writeFileSync(prefFilePath(), JSON.stringify({
+      prefix,
+      host: host || hostOf(prefix),
+      savedAt: new Date().toISOString(),
+    }, null, 2), 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function prefixOfUrl(url) {
+  for (const p of GH_ACCEL_PREFIXES) {
+    const pre = p.endsWith('/') ? p : p + '/';
+    if (url.startsWith(pre)) return pre;
+  }
+  return null;
+}
+
+// 把已保存线路对应的候选 URL 提到最前
+function prioritizePreferred(urls, prefix) {
+  if (!prefix) return urls;
+  const hit = urls.filter((u) => u.startsWith(prefix));
+  if (!hit.length) return urls;
+  return [...hit, ...urls.filter((u) => !u.startsWith(prefix))];
 }
 
 // ---- 测速 ----
@@ -318,18 +366,45 @@ async function downloadPackage(accelUrls, dest, expectSize, emit) {
   const part = dest + '.part';
   let lastErr = '下载失败';
 
-  let urls = accelUrls;
-  try {
-    urls = await speedTest(accelUrls, emit);
-  } catch (e) {
-    emit({ type: 'log', text: `更新测速失败（改按原顺序下载）：${e.message}` });
+  // ★ 读取上次记住的最快线路，下载时优先尝试
+  const savedPrefix = loadPreferredPrefix();
+  if (savedPrefix) {
+    emit({ type: 'log', text: `已记住线路：${hostOf(savedPrefix)}（${savedPrefix}），将优先尝试` });
   }
 
-  // ★★★ 速度门限 + 自动换线 ★★★
-  let remaining = urls.slice();
-  let retestCount = 0;
+  let urls = accelUrls;
+  try {
+    const ranked = await speedTest(accelUrls, emit);
+    urls = prioritizePreferred(ranked, savedPrefix);
+  } catch (e) {
+    emit({ type: 'log', text: `更新测速失败（改按原顺序下载）：${e.message}` });
+    urls = prioritizePreferred(accelUrls, savedPrefix);
+  }
 
-  while (remaining.length > 0) {
+  // ★★★ 速度门限 + 自动换线 + 无限制重试 ★★★
+  let remaining = urls.slice();
+  let round = 0;
+
+  while (true) {
+    // 全部线路都试过：重新测速并开启下一轮（无限制）
+    if (remaining.length === 0) {
+      round++;
+      emit({ type: 'log', text: `全部线路已尝试，重新测速开始第 ${round} 轮（无限制重试）…` });
+      try {
+        const ranked = await speedTest(urls, emit);
+        remaining = prioritizePreferred(ranked, savedPrefix);
+      } catch (e) {
+        emit({ type: 'log', text: `重新测速失败（按原顺序）：${e.message}` });
+        remaining = prioritizePreferred(urls, savedPrefix);
+      }
+      if (remaining.length === 0) {
+        lastErr = lastErr === '下载失败' ? '没有可用的下载线路' : lastErr;
+        break;
+      }
+      // 避免 CPU 空转，轮次之间稍作等待（最多 5s）
+      await new Promise((r) => setTimeout(r, Math.min(round, 5) * 1000));
+    }
+
     const url = remaining.shift();
     const host = hostOf(url);
     emit({ type: 'log', text: `更新下载：尝试 ${host}` });
@@ -342,6 +417,15 @@ async function downloadPackage(accelUrls, dest, expectSize, emit) {
       });
       rmSync(dest, { force: true });
       renameSync(part, dest);
+
+      // ★ 成功线路自动记住并持久化
+      const usedPrefix = prefixOfUrl(url);
+      if (usedPrefix && usedPrefix !== savedPrefix) {
+        if (savePreferredPrefix(usedPrefix, host)) {
+          emit({ type: 'log', text: `已记住线路：${host}（${usedPrefix}）` });
+        }
+      }
+
       emit({ type: 'log', text: `更新下载：完成 ${dest}（源 ${host}）` });
       emit({ type: 'done', ok: true, message: `下载完成：${dest}` });
       return { ok: true, path: dest };
@@ -355,21 +439,19 @@ async function downloadPackage(accelUrls, dest, expectSize, emit) {
           text: `⚡ ${host} 平均速度低于 ${(MIN_DOWNLOAD_BPS / 1024 / 1024).toFixed(1)} MB/s（${SPEED_WINDOW_MS / 1000}s），准备切换线路`,
         });
 
-        if (retestCount < MAX_RETESTS && remaining.length > 0) {
-          retestCount++;
-          emit({ type: 'log', text: `重新测速中（第 ${retestCount}/${MAX_RETESTS} 次）…` });
-          try {
-            // 对剩余线路重新测速；失败线路也纳入测速但排到最后再试
-            const ranked = await speedTest([...remaining, url], emit);
-            remaining = ranked.filter((u) => u !== url).concat([url]);
-          } catch (e2) {
-            emit({ type: 'log', text: `重新测速失败（保留原顺序）：${e2.message}` });
-          }
-        } else if (retestCount >= MAX_RETESTS) {
-          emit({ type: 'log', text: `⚡ 已重测 ${MAX_RETESTS} 次，按剩余顺序继续尝试` });
+        // ★ 无限制重新测速（不再有 MAX_RETESTS 上限），结果中仍优先已记住线路
+        emit({ type: 'log', text: `重新测速中…` });
+        try {
+          const ranked = await speedTest([...remaining, url], emit);
+          remaining = prioritizePreferred(ranked.filter((u) => u !== url), savedPrefix)
+            .concat([url]);
+        } catch (e2) {
+          emit({ type: 'log', text: `重新测速失败（保留原顺序）：${e2.message}` });
+          remaining.push(url);
         }
       } else {
         emit({ type: 'log', text: `更新下载失败（${host}）：${lastErr}` });
+        // 普通失败：丢弃该线路，等 remaining 耗尽后自动进入下一轮无限制重试
       }
     }
   }
